@@ -1,10 +1,13 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -43,17 +46,16 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 	defer data.Close()
 
-	mediaType := header.Header.Get("Content-Type")
-	if mediaType == "" {
-		respondWithError(w, http.StatusBadRequest, "missing content type for thumbnail", err)
+	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "invalid content-type", err)
+		return
+	}
+	if mediaType != "image/jpg" && mediaType != "image/png" {
+		respondWithError(w, http.StatusBadRequest, "invalid media-type", err)
 		return
 	}
 
-	readData, err := io.ReadAll(data)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "error reading file data", err)
-		return
-	}
 	video, err := cfg.db.GetVideo(videoID)
 	if video.UserID != userID {
 		respondWithError(w, http.StatusUnauthorized, "user is not owner of video", err)
@@ -64,10 +66,25 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	encString := base64.StdEncoding.EncodeToString(readData)
-	dataURL := fmt.Sprintf("data:%s;base64,%s", mediaType, encString)
+	// file saving
+	ext, _ := strings.CutPrefix(mediaType, "image/")
+	fileExt := videoIDString + "." + ext
+	path := filepath.Join(cfg.assetsRoot, fileExt)
+	dst, err := os.Create(path)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "error creating file", err)
+		return
+	}
+	defer dst.Close()
 
-	video.ThumbnailURL = &dataURL
+	_, err = io.Copy(dst, data)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "error copying file", err)
+		return
+	}
+
+	tnURL := fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, fileExt)
+	video.ThumbnailURL = &tnURL
 
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
