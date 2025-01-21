@@ -6,6 +6,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
@@ -81,17 +82,49 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	_, err = io.Copy(tmpFile, file)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Error copying to tmp file", err)
+		return
 	}
 
 	// reset tmp file's pointer to the beginning
 	tmpFile.Seek(0, io.SeekStart)
 
+	// moov atom processing
+	procPath, err := processVideoForFastStart(tmpFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error during process via ffmpeg", err)
+		return
+	}
+	procFile, err := os.Open(procPath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error opening processed file", err)
+		return
+	}
+
+	defer os.Remove(procFile.Name())
+	defer procFile.Close()
+
+	// aspect ratio logic
+	dir := ""
+	ratio, err := getVideoAspectRatio(procFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't get aspect ratio", err)
+	}
+	switch ratio {
+	case "16:9":
+		dir = "landscape"
+	case "9:16":
+		dir = "portrait"
+	default:
+		dir = "other"
+	}
+
 	// s3 file action
 	key := makeS3VideoKey()
+	key = filepath.Join(dir, key)
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
 		Key:         &key,
-		Body:        tmpFile,
+		Body:        procFile,
 		ContentType: &mediaType,
 	})
 	if err != nil {

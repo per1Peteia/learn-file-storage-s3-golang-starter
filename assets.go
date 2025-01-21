@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -56,4 +60,70 @@ func makeS3VideoKey() string {
 
 	// Convert to hex string
 	return fmt.Sprintf("%x.mp4", bytes)
+}
+
+// ffprobe -v error -print_format json -show_streams https://tubely-881484.s3.eu-north-1.amazonaws.com/0cd9f1a37ff8d0c72687656c33872cfe.mp4
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	cmd := exec.Command(
+		"ffprobe",
+		"-v",
+		"error",
+		"-print_format",
+		"json",
+		"-show_streams",
+		filePath,
+	)
+	buf := &bytes.Buffer{}
+	cmd.Stdout = buf
+	err := cmd.Run()
+	if err != nil {
+		return "", fmt.Errorf("Error running ffprobe: %w", err)
+	}
+
+	var output struct {
+		Streams []struct {
+			Width  int `json:"width"`
+			Height int `json:"height"`
+		} `json:"streams"`
+	}
+
+	err = json.Unmarshal(buf.Bytes(), &output)
+	if err != nil {
+		return "", fmt.Errorf("Error unmarshaling ffprobe output: %w", err)
+	}
+
+	if len(output.Streams) == 0 {
+		return "", errors.New("no video streams found")
+	}
+
+	width := output.Streams[0].Width
+	height := output.Streams[0].Height
+
+	if width == 16*height/9 {
+		return "16:9", nil
+	} else if height == 16*width/9 {
+		return "9:16", nil
+	}
+	return "other", nil
+}
+
+func processVideoForFastStart(filePath string) (string, error) {
+	outPath := filePath + ".processing"
+
+	cmd := exec.Command(
+		"ffmpeg", "-i", filePath,
+		"-c", "copy",
+		"-movflags", "faststart",
+		"-f", "mp4",
+		outPath,
+	)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("error processing video: %s, %v", stderr.String(), err)
+	}
+
+	return outPath, nil
 }
