@@ -2,15 +2,14 @@ package main
 
 import (
 	"fmt"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
+	"github.com/google/uuid"
 	"io"
 	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
-
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
-	"github.com/google/uuid"
 )
 
 func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +107,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	ratio, err := getVideoAspectRatio(procFile.Name())
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't get aspect ratio", err)
+		return
 	}
 	switch ratio {
 	case "16:9":
@@ -133,7 +133,8 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	// update the video url
-	vidURLString := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, key)
+	// https://d2f12oh3itvuwy.cloudfront.net/portrait/5793afa9bd3fa515129aad0ee73e070e.mp4
+	vidURLString := fmt.Sprintf("%s/%s", cfg.s3CfDistribution, key)
 	video.VideoURL = &vidURLString
 
 	err = cfg.db.UpdateVideo(video)
